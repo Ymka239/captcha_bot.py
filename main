@@ -1,0 +1,83 @@
+from telebot import TeleBot
+from pyTelegramBotCAPTCHA import CaptchaManager, CaptchaOptions, CustomLanguage
+
+bot = TeleBot("Your_API_Key")
+
+# A whitelist of groups and a dictionary of custom greetings for each group
+custom_greetings = {
+    -1001111111111: CustomLanguage(
+        text='Welcome to the Group 1, #USER!\nPlease enter code to confirm you are human.',
+        try_again='Please try again!',
+        your_code='Your captha: ',
+        wrong_user='❌: This captha is not for you!',
+        too_short='❌: The entered code is too short!'
+    ),
+    -1001111111111: CustomLanguage(
+        text='Welcome to the Group 2, #USER!\nPlease enter code to confirm you are human.',
+        try_again='Try again!',
+        your_code='Your captha: ',
+        wrong_user='❌: This captha is not for you!',
+        too_short='❌: The entered code is too short!'
+    )
+}
+
+# Global CaptchaManager without custom settings
+captcha_manager = CaptchaManager(bot.get_me().id)
+
+
+# Handler for new group members
+@bot.message_handler(content_types=["new_chat_members"])
+def new_member(message):
+    if message.chat.id in custom_greetings:
+        # We get a custom language for this group
+        custom_lang = custom_greetings[message.chat.id]
+        # Create custom captcha settings for this group
+        captcha_options = CaptchaOptions(only_digits=True, code_length=4, custom_language=custom_lang)
+        # Apply these settings to the current captcha_manager
+        captcha_manager.default_options = captcha_options
+
+        bot_id = bot.get_me().id  # Get the bot ID
+
+        for new_user in message.new_chat_members:
+            # Check if the new user is a bot
+            if new_user.id != bot_id:
+                captcha_manager.restrict_chat_member(bot, message.chat.id, new_user.id)
+                captcha_manager.send_new_captcha(bot, message.chat, new_user)
+    else:
+        # If the group is not on the whitelist, we do nothing
+        return
+
+
+# Callback query handler
+@bot.callback_query_handler(func=lambda callback: True)
+def on_callback(callback):
+    captcha_manager.update_captcha(bot, callback)
+
+# Handler for correct solved CAPTCHAs
+@captcha_manager.on_captcha_correct
+def on_correct(captcha):
+    bot.send_message(captcha.chat.id, "Congratulations! You have solved the captcha and can chat.\nFor example, tell me about yourself")
+    captcha_manager.unrestrict_chat_member(bot, captcha.chat.id, captcha.user.id)
+    captcha_manager.delete_captcha(bot, captcha)
+
+
+# Handler for wrong solved CAPTCHAs
+@captcha_manager.on_captcha_not_correct
+def on_not_correct(captcha):
+    if (captcha.incorrect_digits == 1 and captcha.previous_tries < 2):
+        captcha_manager.refresh_captcha(bot, captcha)
+    else:
+        bot.kick_chat_member(captcha.chat.id, captcha.user.id)
+        bot.send_message(captcha.chat.id, f"{captcha.user.first_name} couldn't solve the captcha and was banned!")
+        captcha_manager.delete_captcha(bot, captcha)
+
+
+# Handler for timed out CAPTCHAS
+@captcha_manager.on_captcha_timeout
+def on_timeout(captcha):
+    bot.kick_chat_member(captcha.chat.id, captcha.user.id)
+    bot.send_message(captcha.chat.id, f"{captcha.user.first_name} didn't solve the captcha in time and got banned!")
+    captcha_manager.delete_captcha(bot, captcha)
+
+
+bot.polling()
